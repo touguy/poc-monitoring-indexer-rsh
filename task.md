@@ -1,0 +1,3 @@
+- [ ] `BlockRecordRepository.updateStatusUpToBlock` 수정 및 `FINALIZED` 제외 조건 추가
+- [ ] 구문 오류 확인 및 `npm run lint` 실행
+- [ ] 작업 완료 보고 (walkthrough.md 작성)
