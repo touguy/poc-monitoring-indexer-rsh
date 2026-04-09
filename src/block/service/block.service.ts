@@ -1,6 +1,7 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { SchedulerRegistry } from '@nestjs/schedule';
+import { CronJob } from 'cron';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import { Logger } from 'winston';
 import { BlockRecordRepository } from '../repository/block-record.repository';
@@ -20,7 +21,7 @@ import { ErrorCode } from '../../common/exceptions/error-code.enum';
  *   DB에 저장된 직전 블록의 hash와 새 블록의 parentHash를 비교합니다.
  *   불일치 시 즉시 Reorg를 기록합니다.
  *
- * ─ 주기적 검증 (Cron Polling, 10초마다)
+ * ─ 주기적 검증 (Cron Polling, env 설정 : 10초마다)
  *   UNFINALIZED/SAFE 상태 블록을 RPC로 재조회하여 해시를 비교합니다.
  *   불일치 시 Reorg를 기록하고 DB를 최신 체인 데이터로 갱신합니다.
  *   'safe'/'finalized' 태그를 기준으로 블록 확정 상태(Finality)를 갱신합니다.
@@ -42,29 +43,41 @@ export class BlockService implements OnModuleInit {
   /** 마지막으로 DB에 반영된 'finalized' 블록 번호 (불필요한 중복 UPDATE 방지용) */
   private lastProcessedFinalizedBlock = 0;
 
+  /** WebSocket 이벤트를 순차 처리하기 위한 메모리 큐 */
+  private blockQueue: number[] = [];
+
+  /** 메모리 큐 처리 워커 동작 여부 플래그 */
+  private isProcessingQueue = false;
+
   constructor(
     private readonly blockRecordRepo: BlockRecordRepository,
     private readonly rpcService: BlockchainRpcService,
     private readonly wsService: BlockchainWsService,
     private readonly reorgService: ReorgService,
     private readonly config: ConfigService,
+    private readonly schedulerRegistry: SchedulerRegistry,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
   ) { }
 
   async onModuleInit() {
     this.logger.info('BlockService 초기화 시작');
 
-    // 1. 초기 동기화 실행 (비동기 Background 실행)
-    this.syncInitialBlocks();
-
-    // 2. WebSocket 'block' 이벤트 구독 시작
+    // 1. WebSocket 'block' 이벤트 구독 시작 (초기 동기화 중에도 이벤트를 우선 감지)
     this.logger.info('BlockService WebSocket 리스너 초기화 (newHeads 구독 시작)');
 
-    // WsService는 이벤트를 단순 전달합니다.
+    // WsService는 이벤트를 단순 전달합니다. (메모리 큐 적재)
     this.wsService.onEvent('block', async (...args: any[]) => {
       const blockNumber = args[0] as number; // 'block' 이벤트는 첫 번째 인자가 blockNumber
-      await this.handleNewBlock(blockNumber);
+      this.logger.debug(`[WS Event] 블록 ${blockNumber} 큐에 적재`);
+      this.blockQueue.push(blockNumber);
+      this.processBlockQueue(); // 큐 워커 실행 (동시 실행 방지)
     });
+
+    // 2. 초기 동기화 실행 (비동기 Background 실행)
+    this.syncInitialBlocks();
+
+    // 3. 환경변수를 통한 Cron Job 동적 등록
+    this.setupPollingCron();
   }
 
   /**
@@ -136,6 +149,30 @@ export class BlockService implements OnModuleInit {
   }
 
   /**
+   * [WebSocket 메모리 큐 순차 처리 워커]
+   *
+   * 큐에 쌓인 이벤트를 하나씩 꺼내어 순차적으로 handleNewBlock을 실행합니다.
+   * 여러 개의 이벤트가 동시에 들어와도 이 메서드가 단일 스레드처럼 작동하여 트랜잭션 동시성 충돌을 방지합니다.
+   */
+  private async processBlockQueue() {
+    if (this.isProcessingQueue) return;
+    this.isProcessingQueue = true;
+
+    try {
+      while (this.blockQueue.length > 0) {
+        const blockNumber = this.blockQueue.shift();
+        if (blockNumber) {
+          await this.handleNewBlock(blockNumber);
+        }
+      }
+    } catch (error: any) {
+      this.logger.error(`블록 큐 처리 중 오류 발생: ${error.message}`);
+    } finally {
+      this.isProcessingQueue = false;
+    }
+  }
+
+  /**
    * [핵심 비즈니스 로직 - 실시간 Reorg 감지]
    *
    * WebSocket으로 수신된 새 블록을 처리합니다.
@@ -149,17 +186,40 @@ export class BlockService implements OnModuleInit {
    */
   private async handleNewBlock(blockNumber: number) {
     try {
-      // 1. WS는 blockNumber만 push함 → HTTP RPC로 hash/parentHash/timestamp 등 상세 조회
-      const block = await this.rpcService.getBlockByNumber(blockNumber);
-      if (!block) return;
+
+      this.logger.info(`WS00 :블록 ${blockNumber} 수신`);
+
+      // 1. WS는 blockNumber만 push함 → HTTP RPC로 상세 조회 (지연 인덱싱 대비 재시도 로직)
+      let block = null;
+      let retryCount = 0;
+      const maxRetries = 5;
+
+      while (!block && retryCount < maxRetries) {
+        block = await this.rpcService.getBlockByNumber(blockNumber);
+
+        if (!block) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            this.logger.error(`[!!!조회 포기!!!] 블록 ${blockNumber} 데이터가 계속 존재하지 않습니다. 최대 재시도 도달, 처리를 건너뜁니다.`);
+            return;
+          }
+          this.logger.warn(`[조회 지연] 블록 ${blockNumber} 미발견 (시도 ${retryCount}/${maxRetries}). 1초 대기 후 재시도합니다...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      this.logger.info(`WS01 :블록 ${blockNumber} RPC 수신`);
 
       // 2. DB에서 가장 최근에 저장된 블록 조회 (parentHash 비교 기준)
       const latestBlock = await this.blockRecordRepo.getLatestBlock();
 
       // 3. 이미 처리된 블록이거나 과거 블록이면 무시 (예: WS 재연결 시 중복 이벤트)
       if (latestBlock && latestBlock.blockNumber >= blockNumber) {
+        this.logger.info(`WS01-1 :블록 ${blockNumber} 중복으로 Skip. ${latestBlock.blockNumber}`);
         return;
       }
+
+      this.logger.info(`WS02 :블록 ${blockNumber} 처리 시작`);
 
       // 4. [핵심] 직전 블록과 연속적인 경우에만 parentHash 비교로 실시간 Reorg 감지
       if (latestBlock && latestBlock.blockNumber === blockNumber - 1) {
@@ -188,16 +248,29 @@ export class BlockService implements OnModuleInit {
       blockRecord.timestamp = new Date(block.timestamp * 1000);
 
       await this.blockRecordRepo.saveBlock(blockRecord);
-      this.logger.info(`블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
+      this.logger.info(`WS03 :블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
     } catch (error: any) {
       this.logger.error(`handleNewBlock 처리 오류: ${error.message}`);
     }
   }
 
   /**
+   * 환경 변수에서 Cron 설정값을 읽어 동적으로 크론 잡을 등록합니다.
+   */
+  private setupPollingCron() {
+    const cronTime = this.config.get<string>('POLLING_CRON_TIME', '*/10 * * * * *');
+    const job = new CronJob(cronTime, () => {
+      this.handlePollingValidation();
+    });
+
+    this.schedulerRegistry.addCronJob('pollingValidation', job);
+    job.start();
+    this.logger.info(`Polling validation cron scheduled with time: ${cronTime}`);
+  }
+
+  /**
    * [핵심 비즈니스 로직 - 주기적 Reorg 검증 및 Finality 상태 갱신]
    */
-  @Cron(CronExpression.EVERY_10_SECONDS)
   async handlePollingValidation() {
     if (this.isPolling) return;
     this.isPolling = true;
@@ -210,6 +283,8 @@ export class BlockService implements OnModuleInit {
       // ─ Step 1: 이더리움 노드의 safe/finalized 태그를 기준으로 Finality 상태 일괄 갱신
       const safeBlock = await this.rpcService.getBlockByNumber('safe');
       const finalizedBlock = await this.rpcService.getBlockByNumber('finalized');
+
+      this.logger.debug(`[Polling-${this.instanceId}] Safe (${safeBlock.number}) / Finalized (${finalizedBlock.number})`);
 
       if (safeBlock && safeBlock.number > this.lastProcessedSafeBlock) {
         await this.blockRecordRepo.updateStatusUpToBlock(safeBlock.number, BlockStatus.SAFE);
