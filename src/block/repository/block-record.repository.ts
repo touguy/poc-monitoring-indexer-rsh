@@ -120,6 +120,30 @@ export class BlockRecordRepository extends BaseRepository {
   }
 
   /**
+   * 명백히 확정되지 않은 블록(UNFINALIZED, SAFE)들 사이에서 누락된 블록(Gap) 구간을
+   * 데이터베이스 레벨의 윈도우 함수(LEAD)를 활용하여 고성능으로 색출합니다.
+   * 반환값의 missing_start, missing_end는 문자열(bigint형)로 반환될 수 있음에 유의.
+   */
+  async findMissingBlockGaps(entityManager?: EntityManager): Promise<{ missing_start: string; missing_end: string }[]> {
+    const repo = this.getRepository(BlockRecord, entityManager);
+    
+    // 사용자가 제공/승인한 성능 최적화 윈도우 쿼리 사용
+    const query = `
+      SELECT (block_number::bigint) + 1 AS missing_start, 
+             (next_val::bigint) - 1 AS missing_end
+      FROM (
+          SELECT block_number, 
+                 LEAD(block_number) OVER (ORDER BY block_number) AS next_val
+          FROM block_records
+          WHERE status IN ('UNFINALIZED', 'SAFE') 
+      ) t
+      WHERE (next_val::bigint) - (block_number::bigint) > 1;
+    `;
+    
+    return repo.query(query);
+  }
+
+  /**
    * 특정 블록 번호 이상의 모든 블록 레코드를 삭제합니다.
    * Reorg 발생 시 무효화된 미래 블록들을 정리할 때 사용됩니다. (현재 주석 처리됨)
    */

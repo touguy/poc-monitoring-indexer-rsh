@@ -72,7 +72,7 @@ NestJS와 PostgreSQL을 사용하여 이더리움(Sepolia/Mainnet 호환) 네트
 - `RPC_URL`: 블록체인 노드를 순회 조회할 HTTP 기반 풀노드 주소
 - `WSS_URL`: 블록 실시간 스트림 이벤트를 감청할 웹소켓 분기점 주소
 - `INITIAL_SYNC_BLOCK_COUNT`: (기본 100) 백엔드 기동 직후 부족한 과거 블록 격차(Gap)를 보완하기 위한 조회 상한 개수
-- `POLLING_CRON_TIME`: (기본 `*/10 * * * * *`) Polling 다중 동기화 스케줄러 간격을 정하는 Cron 수식
+- `POLLING_CRON_TIME`: (기본 `*/60 * * * * *`) Polling 다중 동기화 스케줄러 간격을 정하는 Cron 수식
 
 ---
 
@@ -87,25 +87,25 @@ NestJS와 PostgreSQL을 사용하여 이더리움(Sepolia/Mainnet 호환) 네트
   - **차이(Gap) 범위가 0 초과 100 미만인 경우**: 잃어버린 누락 구간(Missing Range)만 `Start -> End` 형태로 순차 반복 스윕(Sweep)하며 즉각 보충 저장합니다.
 - 💡장애 방지 기믹: RPC Rate Limit(노드 과부하 발생) 보호를 위해 루프 안에서 **매 블록 조회 후 최소 100ms 지연(`Delay`)**을 발생시키는 프로미스 프로시저를 삽입해야 합니다.
 
-### B. 블록 감지 (Phase 1): WebSocket 기반 실시간 수신 및 1차 Reorg 판독
+### B. 블록 저장 (Phase 1): WebSocket 기반 실시간 수신 및 저장
 - 블록체인 RPC 중 이더리움 `newHeads`(block) 웹소켓 이벤트 스트리밍 기반 리스너를 구독합니다.
 - **메모리 큐(Memory Queue) 적용 원칙**: 다량의 블록이 분기하며 꼬여서 동시에 수신될 때 트랜잭션 충돌(Race Condition 시 발생되는 꼬임) 방지를 위해, 이벤트를 즉각 DB에 넣지 않고 일단 빈 자바스크립트 배열 큐(`blockQueue`)에 적재시킵니다.
 - **순차 처리 워커 (`processBlockQueue`)**:
    1. 배열에서 한 개의 블록만 POP시켜 단일 스레드로 통과시킵니다.
    2. 수신된 이벤트를 이용해 상세 블록 데이터를 HTTP RPC로 패치합니다. (*이더 WS 이벤트 지연 전파로 인한 오류 대비 차원에서, 못 찾으면 바로 포기하지 않고 `최대 5회`까지 반복하며, 매 실패시 `1초 대기`를 적용하는 재시도(Retry) 기믹을 필수 구현합니다.*)
-   3. 데이터베이스 조회 쿼리를 이용해, **시스템 구조상 자신이 가지고 있는 가장 마지막 직전 블록**을 호출합니다.
-   4. **[판별 로직]** 방금 수신 조립 완료된 새 블록의 **`parentHash`**(부모노드주소) 와, 방금 DB에서 가져온 **`blockHash`**(이전 체인 최상단)를 비교합니다.
-   5. **만약 해시값이 다를 경우:** 즉각 실시간 체인 분기/고아 현상(Chain Reorg)으로 간주하고, ReorgLog 테이블에 사유(`"Real-time parentHash mismatch detected"`)를 담아 DB에 INSERT 합니다.
-   6. 위 트리거 로직을 지난 후 (성공 실패 여부 무관), 이 최근 블록은 확정여부 신뢰성이 없으므로 DB `block_records` 안에는 무조건 상태값을 `UNFINALIZED` 로 기록하여 안전 폴백 대상으로 넘깁니다.
+   3. 이 최근 블록은 확정여부 신뢰성이 없으므로 DB `block_records` 안에는 무조건 상태값을 `UNFINALIZED` 로 기록하여 안전 폴백 대상으로 넘깁니다. (기존 레코드가 있을 경우도 업데이트로 처리)
 
 ### C. 블록 감지 (Phase 2): Polling Cron 기반 주기적 검증 / 상태 자동화
-- NestJS 스케줄러를 이용, `POLLING_CRON_TIME` (통상 10초) 간격으로 동작합니다.
+- NestJS 스케줄러를 이용, `POLLING_CRON_TIME` (통상 60초) 간격으로 동작합니다.
 - 워커 고장으로 인한 병목 누수 방지용으로, 작업 변수락(`isPolling=true/false`)을 전위와 후위에 겁니다.
 - **상태 최종 확정 업그레이드 전술 (Finality Upgrades)**:
   - 노드 RPC를 통해 현재 네트워크의 확정 지점 주소인 `eth_getBlockByNumber('safe')`와 `eth_getBlockByNumber('finalized')`을 각각 날려 그 분기 블록 번호를 들고 옵니다.
   - 해당 범위 숫자 이하로 매핑되는 내부 DB에 대해 일괄적으로 `SAFE` 혹은 `FINALIZED` 상태 업데이트를 한 번에 부릅니다. *이때 잦은 Update I/O 발생을 줄이고 성능을 아끼기 위해 메모리 캐시 변수(`lastProcessedSafeBlock` 등) 값 기반으로 비교해, 변화가 없을시 스킵하는 최적화를 구현해야 합니다.*
-- **서브 체인 과거 데이터 2차 조회 / 사후 재검증**:
-  - 현재 시스템 DB 데이터 중 `FINALIZED`가 찍혀 명백히 확정되지 않은 쩌리 블록 목록 (상태: `UNFINALIZED` 이거나 `SAFE`)들을 조회합니다.
+- **REORG 검증**:
+  - 현재 시스템 DB 데이터 중 `FINALIZED`가 찍혀 명백히 확정되지 않은 블록 목록 (상태: `UNFINALIZED` 이거나 `SAFE`)들을 조회합니다.
   - 리스트를 반복문을 돌리면서 RPC 블록을 다시 긁어옵니다. (동일 Rate Limit 방지용 루프 지연 100ms 추가)
   - 네트워크 상의 노드 Hash와 원래 DB에 존재하던 Hash 값을 다시 맞대봅니다.
-  - **[판별 로직]** 만약 과거 데이터의 해시값이 10초 후에 다시 대조해 보니 다릅니다: 사후 지연 Chain Reorg 록온. `ReorgLog`를 찍어 사유(`"Polling validation hash mismatch detected"`)를 넣고, 해당 블록을 최신 이긴 해시로 DB를 UPDATE 시킵니다. (*이때의 Update는 불완전하므로 다시 상태를 UNFINALIZED로 내려 나중에 또 감시받게 둡니다.*)
+  - **[판별 로직]** 만약 과거 데이터의 해시값이 60초 후에 다시 대조해 보니 다릅니다: 사후 지연 Chain Reorg 록온. `ReorgLog`를 찍어 사유(`"Polling validation hash mismatch detected"`)를 넣고, 해당 블록을 최신 이긴 해시로 DB를 UPDATE 시킵니다. (*이때의 Update는 불완전하므로 다시 상태를 UNFINALIZED로 내려 나중에 또 감시받게 둡니다.*)
+- **체인 갭 감지**:  
+  - 현재 시스템 DB 데이터 중 `FINALIZED`가 찍혀 명백히 확정되지 않은 블록 목록 (상태: `UNFINALIZED` 이거나 `SAFE`)들 안에서만 조회하여, 블록 번호가 연속적이지 않고 중간에 비어있는 구간(Gap)을 모두 색출해냅니다.
+  - 리스트를 반복문을 돌리면서 색출된 누락 블록들을 RPC를 통해 긁어와, DB에 무조건 `UNFINALIZED` 상태로 저장(Upsert) 합니다. (동일 Rate Limit 방지용 루프 지연 100ms 추가)

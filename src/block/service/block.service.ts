@@ -210,36 +210,8 @@ export class BlockService implements OnModuleInit {
 
       this.logger.info(`WS01 :블록 ${blockNumber} RPC 수신`);
 
-      // 2. DB에서 가장 최근에 저장된 블록 조회 (parentHash 비교 기준)
-      const latestBlock = await this.blockRecordRepo.getLatestBlock();
-
-      // 3. 이미 처리된 블록이거나 과거 블록이면 무시 (예: WS 재연결 시 중복 이벤트)
-      if (latestBlock && latestBlock.blockNumber >= blockNumber) {
-        this.logger.info(`WS01-1 :블록 ${blockNumber} 중복으로 Skip. ${latestBlock.blockNumber}`);
-        return;
-      }
-
-      this.logger.info(`WS02 :블록 ${blockNumber} 처리 시작`);
-
-      // 4. [핵심] 직전 블록과 연속적인 경우에만 parentHash 비교로 실시간 Reorg 감지
-      if (latestBlock && latestBlock.blockNumber === blockNumber - 1) {
-        if (latestBlock.blockHash !== block.parentHash) {
-          // ⚠️ DB에 있는 블록의 hash ≠ 새 블록의 parentHash → Chain Reorg 발생!
-          await this.reorgService.handleReorg(
-            blockNumber,
-            latestBlock.blockHash,
-            block.parentHash,
-            'Real-time parentHash mismatch detected',
-          );
-        }
-      } else if (latestBlock && latestBlock.blockNumber < blockNumber - 1) {
-        // 블록 번호가 연속되지 않고 갭이 생긴 경우 (WS 일시 단절 등)
-        this.logger.warn(
-          `블록 갭 감지: DB 마지막=${latestBlock.blockNumber}, 수신됨=${blockNumber}`,
-        );
-      }
-
-      // 5. 새 블록을 UNFINALIZED 상태로 DB에 저장
+      // 새 블록을 무조건 UNFINALIZED 상태로 DB에 저장 (기존 내용이 있어도 Upsert됨)
+      // PRD 정책에 따라 WS 수신부에서는 최신 블록 조회나 Reorg/Gap 체크를 수행하지 않습니다.
       const blockRecord = new BlockRecord();
       blockRecord.blockNumber = blockNumber;
       blockRecord.blockHash = block.hash!;
@@ -258,7 +230,7 @@ export class BlockService implements OnModuleInit {
    * 환경 변수에서 Cron 설정값을 읽어 동적으로 크론 잡을 등록합니다.
    */
   private setupPollingCron() {
-    const cronTime = this.config.get<string>('POLLING_CRON_TIME', '*/10 * * * * *');
+    const cronTime = this.config.get<string>('POLLING_CRON_TIME', '*/60 * * * * *');
     const job = new CronJob(cronTime, () => {
       this.handlePollingValidation();
     });
@@ -301,7 +273,7 @@ export class BlockService implements OnModuleInit {
         this.logger.debug(`[Polling-${this.instanceId}] Finalized 상태 업데이트 완료 (Block: ${finalizedBlock.number})`);
       }
 
-      // ─ Step 2: UNFINALIZED/SAFE 블록들을 RPC로 재조회하여 해시 불일치 검증
+      // ─ Step 2: UNFINALIZED/SAFE 블록들을 RPC로 재조회하여 해시 불일치 검증 (REORG 감지)
       this.logger.debug(`[Polling-${this.instanceId}] Step 2 시작: 미확정 블록 검증 (ID: ${executionId})`);
       const blocksToVerify = await this.blockRecordRepo.findUnfinalizedAndSafeBlocks();
 
@@ -325,7 +297,26 @@ export class BlockService implements OnModuleInit {
 
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      this.logger.debug(`[Polling-${this.instanceId}] 폴링 검증 종료 (ID: ${executionId})`);
+
+      // ─ Step 3: 미확정 블록 사이의 체인 갭 감지 및 복구 (Gap Detection)
+      this.logger.debug(`[Polling-${this.instanceId}] Step 3 시작: 체인 갭 감지 및 복구 (ID: ${executionId})`);
+      const gaps = await this.blockRecordRepo.findMissingBlockGaps();
+      
+      for (const gap of gaps) {
+        // Raw SQL 결과값이 bigint 인 경우 string으로 반환될 수 있으므로 Number 형변환 처리
+        const start = Number(gap.missing_start);
+        const end = Number(gap.missing_end);
+
+        this.logger.info(`[Polling-${this.instanceId}] 체인 갭 발견: ${start} ~ ${end} 동기화 시작`);
+        
+        // 발견된 갭 구간을 순차적으로 조회 및 DB 저장 처리 
+        // (saveBlocksInRange 내부에서 루프마다 UNFINALIZED 저장 및 100ms 딜레이를 수행함)
+        if (!isNaN(start) && !isNaN(end) && start <= end) {
+          await this.saveBlocksInRange(start, end);
+        }
+      }
+
+      this.logger.debug(`[Polling-${this.instanceId}] 폴링 검증 전체 종료 (ID: ${executionId})`);
     } catch (error: any) {
       this.logger.error(`[Polling-${this.instanceId}] 폴링 검증 오류: ${error.message}`);
     } finally {
