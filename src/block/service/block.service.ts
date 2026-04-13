@@ -97,7 +97,7 @@ export class BlockService implements OnModuleInit {
       // 2. 케이스별 초기화 로직 분기
       if (!latestDbBlock) {
         // [케이스 1] 데이터가 없는 경우: 최신 블록 기준 limit 개수만큼 초기 동기화
-        this.logger.info(`DB가 비어있습니다. 최근 ${limit}개 블록 초기 동기화를 시작합니다.`);
+        this.logger.warn(`DB가 비어있습니다. 최근 ${limit}개 블록 초기 동기화를 시작합니다.`);
         await this.saveBlocksInRange(startBlock, latestNetworkBlock);
       } else {
         // [데이터가 있는 경우] DB와 네트워크 간의 블록 차이(Gap) 계산
@@ -109,7 +109,7 @@ export class BlockService implements OnModuleInit {
           await this.saveBlocksInRange(startBlock, latestNetworkBlock);
         } else if (gap > 0) {
           // 갭이 0보다 크고 limit 미만인 경우: 누락된 구간만 순차 동기화
-          this.logger.info(`누락된 블록 데이터 보충 시작 (Gap: ${gap})`);
+          this.logger.warn(`누락된 블록 데이터 보충 시작 (Gap: ${gap})`);
           await this.saveBlocksInRange(latestDbBlock.blockNumber + 1, latestNetworkBlock);
         } else {
           this.logger.info(`DB가 최신 상태입니다. (마지막 블록: ${latestDbBlock.blockNumber})`);
@@ -187,7 +187,7 @@ export class BlockService implements OnModuleInit {
   private async handleNewBlock(blockNumber: number) {
     try {
 
-      this.logger.info(`WS00 :블록 ${blockNumber} 수신`);
+      this.logger.debug(`WS00 :블록 ${blockNumber} 수신`);
 
       // 1. WS는 blockNumber만 push함 → HTTP RPC로 상세 조회 (지연 인덱싱 대비 재시도 로직)
       let block = null;
@@ -208,7 +208,7 @@ export class BlockService implements OnModuleInit {
         }
       }
 
-      this.logger.info(`WS01 :블록 ${blockNumber} RPC 수신`);
+      this.logger.debug(`WS01 :블록 ${blockNumber} RPC 수신`);
 
       // 새 블록을 무조건 UNFINALIZED 상태로 DB에 저장 (기존 내용이 있어도 Upsert됨)
       // PRD 정책에 따라 WS 수신부에서는 최신 블록 조회나 Reorg/Gap 체크를 수행하지 않습니다.
@@ -220,7 +220,7 @@ export class BlockService implements OnModuleInit {
       blockRecord.timestamp = new Date(block.timestamp * 1000);
 
       await this.blockRecordRepo.saveBlock(blockRecord);
-      this.logger.info(`WS03 :블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
+      this.logger.debug(`WS03 :블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
     } catch (error: any) {
       this.logger.error(`handleNewBlock 처리 오류: ${error.message}`);
     }
@@ -301,14 +301,14 @@ export class BlockService implements OnModuleInit {
       // ─ Step 3: 미확정 블록 사이의 체인 갭 감지 및 복구 (Gap Detection)
       this.logger.debug(`[Polling-${this.instanceId}] Step 3 시작: 체인 갭 감지 및 복구 (ID: ${executionId})`);
       const gaps = await this.blockRecordRepo.findMissingBlockGaps();
-      
+
       for (const gap of gaps) {
         // Raw SQL 결과값이 bigint 인 경우 string으로 반환될 수 있으므로 Number 형변환 처리
         const start = Number(gap.missing_start);
         const end = Number(gap.missing_end);
 
         this.logger.info(`[Polling-${this.instanceId}] 체인 갭 발견: ${start} ~ ${end} 동기화 시작`);
-        
+
         // 발견된 갭 구간을 순차적으로 조회 및 DB 저장 처리 
         // (saveBlocksInRange 내부에서 루프마다 UNFINALIZED 저장 및 100ms 딜레이를 수행함)
         if (!isNaN(start) && !isNaN(end) && start <= end) {

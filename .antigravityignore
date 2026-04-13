@@ -1,0 +1,19 @@
+# 의존성 및 빌드 결과물
+node_modules/
+dist/
+build/
+out/
+
+# 로그 및 임시 파일
+*.log
+tmp/
+.temp/
+
+# 환경 변수 및 민감 정보 (기본적으로 읽지 않지만 명시 권장)
+.env
+.env.*
+
+# 기타 AI 분석에 불필요한 파일
+package-lock.json
+yarn.lock
+.git/
