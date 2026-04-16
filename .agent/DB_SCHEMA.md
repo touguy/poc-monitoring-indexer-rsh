@@ -49,8 +49,8 @@
   - `idx_reorg_logs_block_number`: 특정 블록 대역별로 발생한 Reorg 빈도 조회용
   - `idx_reorg_logs_detected_at`: 최신순 내림차순(DESC) 리스트업 성능업을 위한 인덱스
 
-### 2.3. `contract_event_records` (스마트 컨트랙트 이벤트 로그 테이블)
-설정된 `TARGET_CONTRACT_ADDRESS` 환경 변수에 해당하는 대상 스마트 컨트랙트에서 방출된 실시간 이벤트 정보들을 수집 및 저장하는 전용 테이블입니다.
+### 2.3. `contract_event_records` (스마트 컨트랙트 이벤트 제너릭 로그 테이블)
+설정된 `MONITOR_CONTRACTS` 환경 변수에 해당하는 대상 스마트 컨트랙트에서 방출된 실시간 이벤트 정보들을 수집 및 저장하는 단일 통합 테이블입니다. JSON 구조를 탈피하고 제너릭 컬럼을 통해 데이터를 파티셔닝/분해하여 저장합니다.
 
 | 컬럼명 | 데이터 타입 | PK 여부 | Null 속성 | Default 옵션 | 상세 설명 |
 |---|---|---|---|---|---|
@@ -58,9 +58,17 @@
 | `transaction_hash` | `VARCHAR(66)` | - | NOT NULL | - | 이벤트를 발생시킨 트랜잭션 해시값 |
 | `block_number` | `INTEGER` | - | NOT NULL | - | 해당 이벤트(트랜잭션)가 포함된 블록 번호 |
 | `log_index` | `INTEGER` | - | NOT NULL | - | 블록 내 트랜잭션 영수증의 Log 인덱스 번호 |
-| `data` | `TEXT` | - | NULL | - | 이벤트의 바이너리 성격 상세 데이터 파라미터 (ABI 디코딩 대상) |
-| `topics` | `JSONB` | - | NOT NULL | - | 이벤트 시그니처 및 Topic(`Indexed` 파라미터) 문자열 배열 등 |
+| `contract_address`| `VARCHAR(42)` | - | NOT NULL | - | 이벤트를 발생시킨 스마트 컨트랙트 주소 |
+| `event_name`   | `VARCHAR(255)`| - | NOT NULL | - | 파싱된 이벤트명 (예: 'Transfer') |
+| `arg1`         | `VARCHAR(255)`| - | NULL     | - | 제너릭 문자열 인자 1 (주로 from 주소 등) |
+| `arg2`         | `VARCHAR(255)`| - | NULL     | - | 제너릭 문자열 인자 2 (주로 to 주소 등) |
+| `arg3`         | `VARCHAR(255)`| - | NULL     | - | 제너릭 문자열 인자 3 |
+| `val1`         | `NUMERIC`     | - | NULL     | - | 제너릭 숫자형 인자 1 (주로 amount, value 등) |
+| `val2`         | `NUMERIC`     | - | NULL     | - | 제너릭 숫자형 인자 2 |
+| `timestamp`    | `TIMESTAMP`   | - | NOT NULL | - | 블록 생성(트랜잭션 발생) 시간 |
 
 - **생성 인덱스(Indexes)**:
-  - `idx_contract_event_records_block_number`: 특정 블록 대역의 이벤트 쿼리 및 향후 블록 Reorg 발생 시 이벤트 무효화 작업 연계를 위한 인덱스
+  - `idx_contract_event_records_block_number`: 특정 블록 대역의 이벤트 쿼리 및 파생된 Reorg 발생 시 이벤트 무효화 작업 연계를 위한 인덱스
   - `idx_contract_event_records_txn_hash`: 트랜잭션 해시 단위 단건 조회용 인덱스
+  - `idx_contract_event_records_contract_event`: 컨트랙트 주소 및 이벤트명 기반 빠른 필터링을 위한 복합 인덱스
+  - `idx_contract_event_records_arg1`, `idx_contract_event_records_arg2`: 주요 주소 기반 빠른 검색을 위한 개별 인덱스

@@ -51,6 +51,13 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
     return this.retryOperation(() => this.provider.getBlockNumber());
   }
 
+  /**
+   * 특정 필터 조건에 매칭되는 온체인 로그 데이터(배열)를 조회합니다.
+   * 이벤트 수집 모듈에서 특정 블록의 로그를 일괄 조회할 때 사용됩니다.
+   */
+  async getLogs(filter: ethers.Filter): Promise<ethers.Log[]> {
+    return this.retryOperation(() => this.provider.getLogs(filter));
+  }
 
   /**
    * RPC 호출 실패 시 지수 백오프(Exponential Backoff)로 재시도합니다.

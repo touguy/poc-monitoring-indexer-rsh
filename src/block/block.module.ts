@@ -6,6 +6,7 @@ import { BlockService } from './service/block.service';
 import { BlockController } from './controller/block.controller';
 import { BlockchainModule } from '../blockchain/blockchain.module';
 import { ReorgModule } from '../reorg/reorg.module';
+import { ContractModule } from '../contract/contract.module';
 
 /**
  * 블록 도메인 모듈.
@@ -20,6 +21,8 @@ import { ReorgModule } from '../reorg/reorg.module';
     BlockchainModule,
     // Reorg 감지 시 로그 기록을 위한 모듈
     ReorgModule,
+    // 스마트 컨트랙트 이벤트 로깅을 위한 모듈
+    ContractModule,
   ],
   controllers: [BlockController],
   providers: [BlockRecordRepository, BlockService],

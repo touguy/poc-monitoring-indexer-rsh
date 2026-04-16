@@ -42,12 +42,12 @@
 
 ---
 
-## D. 스마트 컨트랙트 이벤트 모니터링 (Phase 3): 독립 도메인 기반 실시간 이벤트 수집
-- **도메인 완전 분리 원칙**: 이 기능은 기존 핵심 동작인 '체인 Reorg 및 블록 감지(`src/block`)' 코드를 일체 건드리지 않고, 완전히 독립적인 `src/contract/` 모듈 형태로 추가 구현되어 앱 모듈에 조립됩니다.
-- **WebSocket 로컬 이벤트 구독 (Logs Listener)**:
-  - 구동 시 `.env`에 정의된 `TARGET_CONTRACT_ADDRESS` 환경변수를 설정값으로 매핑하여 읽어옵니다.
-  - 이더리움 `ethers.js` 등의 웹소켓 인프라에 `logs` 이벤트를 매핑(`filters: { address }`)하여, 해당 타겟 주소에서 발생하는 모든 트랜잭션의 컨트랙트 이벤트 스트리밍을 실시간으로 감청합니다.
-- **비동기 메모리 큐 적재 방식**:
-  - 이벤트 트래픽 폭주 시의 DB 부하나 트랜잭션 혼선을 방지하기 위해, 웹소켓으로 수신된 이벤트 데이터를 곧바로 DB 로직으로 던지지 않고 인메모리 큐(배열)에 푸시(`Push`) 합니다.
-- **이벤트 전용 저장 데이터 모델 (`ContractEventRecord`)**:
-  - 순차 처리 워커가 큐를 소비하며 이벤트를 단일 스레드로 통과시킬 때, 개별 트랜잭션 로그의 메타데이터(Transaction Hash, Block Number, Log Index, Data, Topics 구조)를 전용 DB 테이블인 `contract_event_records`에 안전하게 Insert 합니다.
+## D. 스마트 컨트랙트 이벤트 모니터링 (Phase 3): 블록 동기화 결합 기반 이벤트 수집
+- **도메인 분리 및 통합 동기화 방침**: 이 기능은 코드 아키텍처 상으로는 독립된 `src/contract/` 모듈 형식을 가지지만, 인덱싱 흐름 상으로는 `src/block` 내의 블록 저장 로직(`saveBlocksInRange`, `handleNewBlock`)과 일체화되어 동시에 수집됩니다. (블록 누락 시 로그만 수집되는 현상 방지)
+- **RPC `getLogs` 필터 기반 일괄 조회**:
+  - 구동 시 `.env`에 정의된 `MONITOR_CONTRACTS` (모니터링 대상 컨트랙트 주소 및 토픽) 환경변수를 바탕으로 공통 필터(Filter)를 설정합니다.
+  - 별도의 WebSocket 이벤트 리스너를 열지 않고, 동기화/수집해야 할 특정 블록 번호가 정해지면 해당 블록에 대해 필터를 묶어 단 1회의 `eth_getLogs` RPC를 명시적으로 요청합니다.
+- **제너릭 파싱 및 저장 모델 (`ContractEventRecord`)**:
+  - `getLogs`로 가져온 한 블록 내 다중 로그 배열을 `ethers.Interface`로 개별 디코딩합니다.
+  - JSON 덤프 방식을 피하고, 공통 `contract_event_records` 테이블의 `arg1`, `arg2`, `arg3`, `val1`, `val2`와 같은 제너릭 파티셔닝 컬럼에 이벤트 종류별로 데이터를 분해(Mapping)하여 저장합니다.
+  - 이 데이터들은 원래 트랜잭션이 포함된 블록 메타정보(블록 번호, logIndex 등)와 함께 저장되므로, 추후 해당 블록이 Chain Reorg 대상이 될 경우 동일하게 롤백(Rollback) 처리에 연계됩니다.

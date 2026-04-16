@@ -9,6 +9,7 @@ import { BlockRecord, BlockStatus } from '../entity/block-record.entity';
 import { BlockchainRpcService } from '../../blockchain/service/blockchain-rpc.service';
 import { BlockchainWsService } from '../../blockchain/service/blockchain-ws.service';
 import { ReorgService } from '../../reorg/service/reorg.service';
+import { ContractEventService } from '../../contract/service/contract-event.service';
 import { BlockRecordQueryDto } from '../dto/block-record-query.dto';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import { ErrorCode } from '../../common/exceptions/error-code.enum';
@@ -54,6 +55,7 @@ export class BlockService implements OnModuleInit {
     private readonly rpcService: BlockchainRpcService,
     private readonly wsService: BlockchainWsService,
     private readonly reorgService: ReorgService,
+    private readonly contractEventService: ContractEventService,
     private readonly config: ConfigService,
     private readonly schedulerRegistry: SchedulerRegistry,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
@@ -140,6 +142,7 @@ export class BlockService implements OnModuleInit {
         blockRecord.timestamp = new Date(block.timestamp * 1000);
 
         await this.blockRecordRepo.saveBlock(blockRecord);
+        await this.contractEventService.fetchAndSaveEventsForBlock(i, blockRecord.timestamp);
       }
 
       // RPC 노드의 Rate Limit 방지를 위해 각 요청 사이에 100ms 딜레이 적용
@@ -220,6 +223,8 @@ export class BlockService implements OnModuleInit {
       blockRecord.timestamp = new Date(block.timestamp * 1000);
 
       await this.blockRecordRepo.saveBlock(blockRecord);
+      await this.contractEventService.fetchAndSaveEventsForBlock(blockNumber, blockRecord.timestamp);
+      
       this.logger.debug(`WS03 :블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
     } catch (error: any) {
       this.logger.error(`handleNewBlock 처리 오류: ${error.message}`);
@@ -293,6 +298,9 @@ export class BlockService implements OnModuleInit {
           record.status = BlockStatus.UNFINALIZED;
 
           await this.blockRecordRepo.saveBlock(record);
+          
+          await this.contractEventService.rollbackEvents(record.blockNumber);
+          await this.contractEventService.fetchAndSaveEventsForBlock(record.blockNumber, new Date(rpcBlock.timestamp * 1000));
         }
 
         await new Promise((resolve) => setTimeout(resolve, 100));

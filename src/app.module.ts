@@ -13,6 +13,8 @@ import { BlockModule } from './block/block.module';
 import { ReorgModule } from './reorg/reorg.module';
 import { BlockRecord } from './block/entity/block-record.entity';
 import { ReorgLog } from './reorg/entity/reorg-log.entity';
+import { ContractModule } from './contract/contract.module';
+import { ContractEventRecord } from './contract/entity/contract-event-record.entity';
 
 /**
  * 애플리케이션의 루트 모듈.
@@ -41,7 +43,7 @@ import { ReorgLog } from './reorg/entity/reorg-log.entity';
         username: config.get<string>('DB_USER', 'postgres'),
         password: config.get<string>('DB_PASSWORD', 'postgres'),
         database: config.get<string>('DB_NAME', 'indexer'),
-        entities: [BaseEntity, BlockRecord, ReorgLog],
+        entities: [BaseEntity, BlockRecord, ReorgLog, ContractEventRecord],
         synchronize: false, // 보안 및 정합성을 위해 init.sql을 통한 수동 관리 권장
         logging: process.env.NODE_ENV !== 'production',
       }),
@@ -52,6 +54,7 @@ import { ReorgLog } from './reorg/entity/reorg-log.entity';
     BlockchainModule,
     BlockModule,
     ReorgModule,
+    ContractModule,
   ],
   controllers: [],
   providers: [
