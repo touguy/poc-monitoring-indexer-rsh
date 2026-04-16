@@ -45,7 +45,7 @@
 ## D. 스마트 컨트랙트 이벤트 모니터링 (Phase 3): 블록 동기화 결합 기반 이벤트 수집
 - **도메인 분리 및 통합 동기화 방침**: 이 기능은 코드 아키텍처 상으로는 독립된 `src/contract/` 모듈 형식을 가지지만, 인덱싱 흐름 상으로는 `src/block` 내의 블록 저장 로직(`saveBlocksInRange`, `handleNewBlock`)과 일체화되어 동시에 수집됩니다. (블록 누락 시 로그만 수집되는 현상 방지)
 - **RPC `getLogs` 필터 기반 일괄 조회**:
-  - 구동 시 `.env`에 정의된 `MONITOR_CONTRACTS` (모니터링 대상 컨트랙트 주소 및 토픽) 환경변수를 바탕으로 공통 필터(Filter)를 설정합니다.
+  - 구동 시 `.env`에 정의된 `CONTRACT_ADDRESSES` 및 `CONTRACTS_TOPICS` (모니터링 대상 주소 및 이벤트명) 환경변수를 바탕으로 동적으로 이벤트 해시를 변환하여 공통 필터(Filter)를 설정합니다.
   - 별도의 WebSocket 이벤트 리스너를 열지 않고, 동기화/수집해야 할 특정 블록 번호가 정해지면 해당 블록에 대해 필터를 묶어 단 1회의 `eth_getLogs` RPC를 명시적으로 요청합니다.
 - **제너릭 파싱 및 저장 모델 (`ContractEventRecord`)**:
   - `getLogs`로 가져온 한 블록 내 다중 로그 배열을 `ethers.Interface`로 개별 디코딩합니다.

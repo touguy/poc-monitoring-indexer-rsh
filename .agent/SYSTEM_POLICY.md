@@ -38,6 +38,7 @@
 | `DB_NAME` | | 프로젝트에서 사용할 타겟 데이터베이스 명 |
 | `RPC_URL` | | 블록체인 노드를 순회 조회할 HTTP 기반 풀노드 주소 |
 | `WSS_URL` | | 블록 실시간 스트림 이벤트를 감청할 웹소켓 노드 라우터 주소 |
-| `TARGET_CONTRACT_ADDRESS` | | 실시간으로 이벤트를 모니터링하고 추적할 대상 스마트 컨트랙트 주소 (예: `0x45...`) |
+| `CONTRACT_ADDRESSES` | | 실시간으로 이벤트를 수집/추적할 대상 컨트랙트 주소 목록 (쉼표 구분) |
+| `CONTRACTS_TOPICS` | | 수집 대상 이벤트명 목록 (쉼표 구분, 예: Transfer, Mint 등) |
 | `INITIAL_SYNC_BLOCK_COUNT` | `100` | 백엔드 기동 직후 부족한 과거 블록 격차(Gap)를 보완하기 위한 조회 상한 허용치 |
 | `POLLING_CRON_TIME` | `*/60 * * * * *` | 주기적 Polling(자동화 검증)을 위한 스케줄러 간격을 정하는 Cron 수식 |
