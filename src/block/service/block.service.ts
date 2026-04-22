@@ -50,6 +50,11 @@ export class BlockService implements OnModuleInit {
   /** 메모리 큐 처리 워커 동작 여부 플래그 */
   private isProcessingQueue = false;
 
+  /** 🚀 [Ponder 확장 기능 - 옵션 2] 실시간 Reorg 백트레이싱을 위한 마지막 처리 블록 해시 캐시 */
+  private lastProcessedBlockHash: string | null = null;
+  /** 🚀 [Ponder 확장 기능 - 옵션 2] 마지막 처리 블록 번호 캐시 */
+  private lastProcessedBlockNumber: number | null = null;
+
   constructor(
     private readonly blockRecordRepo: BlockRecordRepository,
     private readonly rpcService: BlockchainRpcService,
@@ -116,6 +121,13 @@ export class BlockService implements OnModuleInit {
         } else {
           this.logger.info(`DB가 최신 상태입니다. (마지막 블록: ${latestDbBlock.blockNumber})`);
         }
+      }
+
+      // 🚀 [Ponder 확장 기능 - 옵션 2] 초기 동기화 완료 후 캐시 갱신
+      const updatedLatestDbBlock = await this.blockRecordRepo.getLatestBlock();
+      if (updatedLatestDbBlock) {
+        this.lastProcessedBlockHash = updatedLatestDbBlock.blockHash;
+        this.lastProcessedBlockNumber = updatedLatestDbBlock.blockNumber;
       }
     } catch (error: any) {
       this.logger.error(`초기 동기화 중 오류 발생: ${error.message}`, { stack: error.stack });
@@ -216,6 +228,27 @@ export class BlockService implements OnModuleInit {
 
       this.logger.debug(`WS01 :블록 ${blockNumber} RPC 수신`);
 
+      // 🚀 [Ponder 확장 기능 - 옵션 2] 실시간 Reorg 감지 및 백트레이싱 (Realtime Backtracing)
+      if (this.lastProcessedBlockHash && this.lastProcessedBlockNumber !== null) {
+        // 방금 받은 블록이 다음 번호인데 parentHash가 내가 아는 마지막 해시와 다르면 분기(Reorg) 발생!
+        if (blockNumber === this.lastProcessedBlockNumber + 1 && block.parentHash !== this.lastProcessedBlockHash) {
+          this.logger.warn(`[Realtime Reorg] 해시 불일치 감지! 역추적을 시작합니다. (Block: ${blockNumber})`);
+          
+          await this.reorgService.handleReorg(
+            this.lastProcessedBlockNumber,
+            this.lastProcessedBlockHash,
+            block.parentHash,
+            'Realtime WebSocket Backtracing detected mismatch'
+          );
+
+          // 이벤트를 롤백하고 상태 캐시를 비워 다음 Polling이 안전하게 갭을 잡도록 유도하거나, 
+          // 직접 루프를 돌며 DB를 복원할 수 있습니다.
+          await this.contractEventService.rollbackEvents(this.lastProcessedBlockNumber);
+          this.lastProcessedBlockHash = null;
+          this.lastProcessedBlockNumber = null;
+        }
+      }
+
       // 새 블록을 무조건 UNFINALIZED 상태로 DB에 저장 (기존 내용이 있어도 Upsert됨)
       // PRD 정책에 따라 WS 수신부에서는 최신 블록 조회나 Reorg/Gap 체크를 수행하지 않습니다.
       const blockRecord = new BlockRecord();
@@ -226,7 +259,18 @@ export class BlockService implements OnModuleInit {
       blockRecord.timestamp = new Date(block.timestamp * 1000);
 
       await this.blockRecordRepo.saveBlock(blockRecord);
-      await this.contractEventService.fetchAndSaveEventsForBlock(blockNumber);
+      
+      // 🚀 [Ponder 확장 기능 - 옵션 1, 4] logsBloom과 blockHash를 넘겨 조건부 이벤트/내부 트랜잭션 수집
+      await this.contractEventService.fetchAndSaveEventsForBlock(
+        blockNumber, 
+        blockNumber, 
+        (block as any).logsBloom, 
+        block.hash!
+      );
+
+      // 캐시 갱신
+      this.lastProcessedBlockHash = block.hash!;
+      this.lastProcessedBlockNumber = blockNumber;
 
       this.logger.debug(`WS03 :블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
     } catch (error: any) {

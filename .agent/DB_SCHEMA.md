@@ -71,3 +71,29 @@
   - `idx_contract_event_records_txn_hash`: 트랜잭션 해시 단위 단건 조회용 인덱스
   - `idx_contract_event_records_contract_event`: 컨트랙트 주소 및 이벤트명 기반 빠른 필터링을 위한 복합 인덱스
   - `idx_contract_event_records_arg1`, `idx_contract_event_records_arg2`: 주요 주소 기반 빠른 검색을 위한 개별 인덱스
+
+### 2.4. `dynamic_contracts` (🚀 Ponder 확장 기능 - 동적 팩토리 주소 추적)
+Factory 패턴 모니터링 시 런타임에 새롭게 발견된 자식 컨트랙트 주소를 영속적으로 저장하여, 앱 재시작 시에도 잃어버리지 않도록 유지하는 테이블입니다.
+
+| 컬럼명 | 데이터 타입 | PK 여부 | Null 속성 | Default 옵션 | 상세 설명 |
+|---|---|---|---|---|---|
+| `id` | `BIGSERIAL` | O (PK) | NOT NULL | 자동증가 | 고유 식별 번호 |
+| `factory_address` | `VARCHAR(42)` | - | NOT NULL | - | 자식 컨트랙트를 생성한 부모 Factory 주소 |
+| `child_address` | `VARCHAR(42)` | - | NOT NULL | - | 새롭게 생성되어 모니터링 대상이 된 자식 컨트랙트 주소 |
+| `created_block` | `INTEGER` | - | NOT NULL | - | 자식 컨트랙트가 생성된 블록 번호 |
+
+- **생성 인덱스(Indexes)**:
+  - `idx_dynamic_contracts_child`: 자식 주소 중복 방지 및 빠른 조회용 단일/유니크 인덱스
+
+### 2.5. `internal_transaction_records` (🚀 Ponder 확장 기능 - Trace 수집)
+이벤트(`Log`)로 남지 않는 컨트랙트 내부 호출 및 상태 변경 내역을 저장하기 위한 보조 데이터 테이블입니다.
+
+| 컬럼명 | 데이터 타입 | PK 여부 | Null 속성 | Default 옵션 | 상세 설명 |
+|---|---|---|---|---|---|
+| `id` | `BIGSERIAL` | O (PK) | NOT NULL | 자동증가 | 내부 트랜잭션 고유 식별 번호 |
+| `transaction_hash` | `VARCHAR(66)` | - | NOT NULL | - | 원본 트랜잭션 해시값 |
+| `block_number` | `INTEGER` | - | NOT NULL | - | 포함된 블록 번호 |
+| `from_address` | `VARCHAR(42)` | - | NOT NULL | - | 송신 또는 호출 주소 |
+| `to_address` | `VARCHAR(42)` | - | NULL | - | 수신 또는 대상 컨트랙트 주소 |
+| `value` | `NUMERIC` | - | NULL | - | 전송된 이더(ETH) 또는 토큰 단위 값 |
+| `call_type` | `VARCHAR(20)` | - | NOT NULL | - | 호출 유형 (CALL, DELEGATECALL, CREATE 등) |

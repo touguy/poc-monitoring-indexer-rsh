@@ -60,6 +60,16 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * 🚀 [Ponder 확장 기능] 블록 해시 기반으로 내부 트랜잭션(Traces)을 수집합니다.
+   * @param blockHash 대상 블록 해시
+   */
+  async debugTraceBlockByHash(blockHash: string): Promise<any[]> {
+    return this.retryOperation(() => 
+      this.provider.send('debug_traceBlockByHash', [blockHash, { tracer: 'callTracer' }])
+    );
+  }
+
+  /**
    * RPC 호출 실패 시 지수 백오프(Exponential Backoff)로 재시도합니다.
    * - 최대 재시도: 4회 (2초 → 4초 → 8초 → 16초)
    * - 400(잘못된 요청), 404(찾을 수 없음) 에러는 재시도 없이 즉시 예외를 던집니다.

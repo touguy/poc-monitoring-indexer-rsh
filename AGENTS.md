@@ -20,7 +20,7 @@
 
 ### 📌 기획 및 설계 (Architecture & Product)
 - 📄 **[PRD.md](./PRD.md)**: 프로젝트 개요, 기본 기술 스택, 최상위 아키텍처 (Layer 원리 및 폴더 구조) 요약 (마스터 시작점)
-- 📄 **[BUSINESS_LOGIC.md](./.agent/BUSINESS_LOGIC.md)**: 블록 동기화 워커, Reorg 검증 및 복구 워커, WebSocket 큐, 지연 보상 최적화 등 핵심 인덱싱 메커니즘 딥다이브
+- 📄 **[BUSINESS_LOGIC.md](./.agent/BUSINESS_LOGIC.md)**: 블록 동기화 워커, Reorg 검증 및 복구 워커, WebSocket 큐, 지연 보상 최적화 등 핵심 인덱싱 메커니즘 딥다이브 (+ 🚀 Ponder 확장 기능 명세 포함)
 
 ### ⚙️ 코어 규칙 및 정책 (Core Policy)
 - 📄 **[SYSTEM_POLICY.md](./.agent/SYSTEM_POLICY.md)**: 시스템 공통 원칙 (ResultResDto 응답 변환, 글로벌 예외 필터, Winston 로깅 및 `.env` 환경변수 스펙)

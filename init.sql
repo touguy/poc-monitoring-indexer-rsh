@@ -70,3 +70,35 @@ CREATE INDEX IF NOT EXISTS idx_contract_event_records_arg1
 
 CREATE INDEX IF NOT EXISTS idx_contract_event_records_arg2
     ON contract_event_records (arg2);
+
+-- 2026-04-22 Ponder 확장 아키텍처 스키마 추가
+CREATE TABLE IF NOT EXISTS dynamic_contracts (
+    id BIGSERIAL PRIMARY KEY,
+    factory_address VARCHAR(42) NOT NULL,
+    child_address VARCHAR(42) NOT NULL,
+    created_block INTEGER NOT NULL,
+    del_yn VARCHAR(1) DEFAULT 'N' NOT NULL,
+    sys_reg_dtm TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    sys_upd_dtm TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dynamic_contracts_child
+    ON dynamic_contracts (child_address);
+
+CREATE TABLE IF NOT EXISTS internal_transaction_records (
+    id BIGSERIAL PRIMARY KEY,
+    transaction_hash VARCHAR(66) NOT NULL,
+    block_number INTEGER NOT NULL,
+    from_address VARCHAR(42) NOT NULL,
+    to_address VARCHAR(42),
+    value NUMERIC,
+    call_type VARCHAR(20) NOT NULL,
+    del_yn VARCHAR(1) DEFAULT 'N' NOT NULL,
+    sys_reg_dtm TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    sys_upd_dtm TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_internal_tx_records_block_number
+    ON internal_transaction_records (block_number);
+CREATE INDEX IF NOT EXISTS idx_internal_tx_records_txn_hash
+    ON internal_transaction_records (transaction_hash);

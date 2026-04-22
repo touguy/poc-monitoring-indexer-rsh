@@ -23,6 +23,11 @@
    2. 수신된 이벤트를 이용해 상세 블록 데이터를 HTTP RPC로 패치합니다. (*이더 WS 이벤트 지연 전파로 인한 오류 대비 차원에서, 못 찾으면 바로 포기하지 않고 `최대 5회`까지 반복하며, 매 실패시 `1초 대기`를 적용하는 재시도(Retry) 기믹을 필수 구현합니다.*)
    3. 이 최근 블록은 확정여부 신뢰성이 없으므로 DB `block_records` 안에는 무조건 상태값을 `UNFINALIZED` 로 기록하여 안전 폴백 대상으로 넘깁니다. (기존 레코드가 있을 경우도 업데이트로 처리)
 
+> [!NOTE]
+> 🚀 **[Ponder 확장 기능 - 옵션 2: 실시간 Reorg 감지 (Realtime Backtracing)]**
+> - **변경 계획**: `processBlockQueue`에서 새 블록을 Pop할 때, 메모리에 캐싱된 `lastProcessedBlockHash`와 새 블록의 `parentHash`를 즉시 대조합니다.
+> - 해시 불일치 발생 시 즉시 큐를 일시 정지(Pause)하고, RPC를 통해 조상 해시를 역추적(While loop)하여 공통 조상 블록을 찾은 뒤 DB 상태를 롤백하고 인덱싱을 재개합니다. (기존 Phase 2의 Reorg 감지를 Phase 1으로 앞당겨 실시간성 극대화)
+
 ---
 
 ## C. 블록 감지 (Phase 2): Polling Cron 기반 주기적 검증 / 상태 자동화
@@ -44,10 +49,26 @@
 
 ## D. 스마트 컨트랙트 이벤트 모니터링 (Phase 3): 블록 동기화 결합 기반 이벤트 수집
 - **도메인 분리 및 통합 동기화 방침**: 이 기능은 코드 아키텍처 상으로는 독립된 `src/contract/` 모듈 형식을 가지지만, 인덱싱 흐름 상으로는 `src/block` 내의 블록 저장 로직(`saveBlocksInRange`, `handleNewBlock`)과 일체화되어 동시에 수집됩니다. (블록 누락 시 로그만 수집되는 현상 방지)
+
+> [!NOTE]
+> 🚀 **[Ponder 확장 기능 - 옵션 1: Bloom Filter 최적화]**
+> - **변경 계획**: 무조건 `eth_getLogs`를 호출하지 않고, 블록 헤더에 포함된 `logsBloom` 필드를 `ethers.js`의 Bloom Filter 유틸리티로 먼저 검사합니다.
+> - 타겟 컨트랙트 주소나 토픽이 블록에 존재할 가능성이 있을 때만(`true` 반환 시) 아래의 RPC 호출을 수행하여 노드 트래픽을 극적으로 절약합니다.
+
 - **RPC `getLogs` 필터 기반 일괄 조회**:
   - 구동 시 `.env`에 정의된 `CONTRACT_ADDRESSES` 및 `CONTRACTS_TOPICS` (모니터링 대상 주소 및 이벤트명) 환경변수를 바탕으로 동적으로 이벤트 해시를 변환하여 공통 필터(Filter)를 설정합니다.
+
+> [!NOTE]
+> 🚀 **[Ponder 확장 기능 - 옵션 3: 팩토리(Factory) 동적 주소 추적]**
+> - **변경 계획**: Factory 컨트랙트의 `Created` 이벤트를 파싱할 경우, 생성된 자식 컨트랙트 주소를 인메모리 `DynamicAddressRegistry` 및 DB `dynamic_contracts` 테이블에 동적으로 추가합니다.
+> - 이후 블록의 `getLogs` 호출 시 `.env`의 정적 주소와 동적 주소 배열을 병합(Merge)하여 필터로 사용합니다.
+
   - 별도의 WebSocket 이벤트 리스너를 열지 않고, 동기화/수집해야 할 특정 블록 번호가 정해지면 해당 블록에 대해 필터를 묶어 단 1회의 `eth_getLogs` RPC를 명시적으로 요청합니다.
 - **제너릭 파싱 및 저장 모델 (`ContractEventRecord`)**:
   - `getLogs`로 가져온 한 블록 내 다중 로그 배열을 `ethers.Interface`로 개별 디코딩합니다.
   - JSON 덤프 방식을 피하고, 공통 `contract_event_records` 테이블의 `arg1`, `arg2`, `arg3`, `val1`, `val2`와 같은 제너릭 파티셔닝 컬럼에 이벤트 종류별로 데이터를 분해(Mapping)하여 저장합니다.
   - 이 데이터들은 원래 트랜잭션이 포함된 블록 메타정보(블록 번호, logIndex 등)와 함께 저장되므로, 추후 해당 블록이 Chain Reorg 대상이 될 경우 동일하게 롤백(Rollback) 처리에 연계됩니다.
+
+> [!NOTE]
+> 🚀 **[Ponder 확장 기능 - 옵션 4: 내부 트랜잭션 (Traces) 수집]**
+> - **변경 계획**: `eth_getLogs` 호출과 병렬로 `debug_traceBlockByHash`를 호출하여 명시적인 `emit` 없이 상태를 변경하는 내부 호출(Internal Calls) 트랜잭션 내역까지 수집하여 `internal_transaction_records`에 저장합니다. (단, Archive 노드 필수 및 환경변수 `ENABLE_TRACE_SYNC=true` 토글 적용)
