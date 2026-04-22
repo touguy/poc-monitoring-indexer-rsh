@@ -42,7 +42,7 @@ export class ContractEventService implements OnModuleInit {
 
       if (addressesStr && topicsStr) {
         this.targetAddresses = addressesStr.split(',').map(a => a.trim().toLowerCase());
-        
+
         const eventNames = topicsStr.split(',').map(t => t.trim());
         this.targetTopics = eventNames.map(name => {
           const formattedName = name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
@@ -62,19 +62,23 @@ export class ContractEventService implements OnModuleInit {
   }
 
   /**
-   * BlockService에서 새 블록을 인덱싱할 때 호출하여 해당 블록의 설정된 하위 컨트랙트 이벤트들을 일괄 수집합니다.
+   * 단일 블록 또는 특정 블록 범위의 설정된 컨트랙트 이벤트를 일괄 수집합니다.
+   * 다중 블록일 경우 두 번째 인자로 toBlockNumber를 추가 전달합니다.
    * 
-   * @param blockNumber 수집 대상 블록 번호
-   * @param timestamp 블록의 타임스탬프
+   * @param blockNumber 수집 시작 블록 번호
+   * @param toBlockNumber 수집 끝 블록 번호 (범위 조회 시)
    */
-  async fetchAndSaveEventsForBlock(blockNumber: number, timestamp: Date): Promise<void> {
+  async fetchAndSaveEventsForBlock(blockNumber: number, toBlockNumber?: number): Promise<void> {
     if (this.targetAddresses.length === 0 || this.targetTopics.length === 0) return;
 
+    const fromBlock = blockNumber;
+    const toBlock = toBlockNumber ?? blockNumber;
+
     try {
-      // 주소 및 토픽 리스트 기반 RPC 필터 구성 (단일 getLogs 호출로 I/O 최소화)
+      // 주소 및 토픽 리스트 기반 RPC 필터 구성
       const filter: ethers.Filter = {
-        fromBlock: blockNumber,
-        toBlock: blockNumber,
+        fromBlock,
+        toBlock,
         address: this.targetAddresses,
         topics: [this.targetTopics], // RPC 레벨에서 지정 토픽 중 하나라도 매칭(OR)되는 로그만 필터링
       };
@@ -99,7 +103,6 @@ export class ContractEventService implements OnModuleInit {
           record.logIndex = log.index;
           record.contractAddress = log.address;
           record.eventName = parsed.name; // 예: 'Transfer'
-          record.timestamp = timestamp;
 
           // 제너릭 컬럼 매핑 로직
           if (parsed.name === 'Transfer') {
@@ -132,13 +135,16 @@ export class ContractEventService implements OnModuleInit {
         }
       }
 
+      const rangeStr = fromBlock === toBlock ? fromBlock.toString() : `${fromBlock}-${toBlock}`;
+
       if (recordsToSave.length > 0) {
         await this.contractEventRepo.saveEventsBulk(recordsToSave);
-        this.logger.info(`Block ${blockNumber}: ${recordsToSave.length} contract events parsed and saved.`);
+        this.logger.info(`Block(s) ${rangeStr}: ${recordsToSave.length} contract events parsed and saved.`);
       }
 
     } catch (e: any) {
-      this.logger.error(`Failed to fetch events for block ${blockNumber}: ${e.message}`, { stack: e.stack });
+      const rangeStr = fromBlock === toBlock ? fromBlock.toString() : `${fromBlock}-${toBlock}`;
+      this.logger.error(`Failed to fetch events for block(s) ${rangeStr}: ${e.message}`, { stack: e.stack });
     }
   }
 

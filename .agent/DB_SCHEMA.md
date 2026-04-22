@@ -65,7 +65,6 @@
 | `arg3`         | `VARCHAR(255)`| - | NULL     | - | 제너릭 문자열 인자 3 |
 | `val1`         | `NUMERIC`     | - | NULL     | - | 제너릭 숫자형 인자 1 (주로 amount, value 등) |
 | `val2`         | `NUMERIC`     | - | NULL     | - | 제너릭 숫자형 인자 2 |
-| `timestamp`    | `TIMESTAMP`   | - | NOT NULL | - | 블록 생성(트랜잭션 발생) 시간 |
 
 - **생성 인덱스(Indexes)**:
   - `idx_contract_event_records_block_number`: 특정 블록 대역의 이벤트 쿼리 및 파생된 Reorg 발생 시 이벤트 무효화 작업 연계를 위한 인덱스

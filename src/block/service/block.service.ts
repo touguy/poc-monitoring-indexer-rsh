@@ -142,12 +142,15 @@ export class BlockService implements OnModuleInit {
         blockRecord.timestamp = new Date(block.timestamp * 1000);
 
         await this.blockRecordRepo.saveBlock(blockRecord);
-        await this.contractEventService.fetchAndSaveEventsForBlock(i, blockRecord.timestamp);
       }
 
       // RPC 노드의 Rate Limit 방지를 위해 각 요청 사이에 100ms 딜레이 적용
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+
+    // 트랜젝션 데이터 일괄 조회
+    await this.contractEventService.fetchAndSaveEventsForBlock(startBlock, endBlock);
+
     this.logger.info(`블록 범위 동기화 완료: ${startBlock} ~ ${endBlock}`);
   }
 
@@ -223,8 +226,8 @@ export class BlockService implements OnModuleInit {
       blockRecord.timestamp = new Date(block.timestamp * 1000);
 
       await this.blockRecordRepo.saveBlock(blockRecord);
-      await this.contractEventService.fetchAndSaveEventsForBlock(blockNumber, blockRecord.timestamp);
-      
+      await this.contractEventService.fetchAndSaveEventsForBlock(blockNumber);
+
       this.logger.debug(`WS03 :블록 ${blockNumber} UNFINALIZED 상태로 저장 완료`);
     } catch (error: any) {
       this.logger.error(`handleNewBlock 처리 오류: ${error.message}`);
@@ -298,9 +301,9 @@ export class BlockService implements OnModuleInit {
           record.status = BlockStatus.UNFINALIZED;
 
           await this.blockRecordRepo.saveBlock(record);
-          
+
           await this.contractEventService.rollbackEvents(record.blockNumber);
-          await this.contractEventService.fetchAndSaveEventsForBlock(record.blockNumber, new Date(rpcBlock.timestamp * 1000));
+          await this.contractEventService.fetchAndSaveEventsForBlock(record.blockNumber);
         }
 
         await new Promise((resolve) => setTimeout(resolve, 100));

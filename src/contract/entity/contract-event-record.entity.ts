@@ -46,7 +46,4 @@ export class ContractEventRecord extends BaseEntity {
 
   @Column({ name: 'val2', type: 'numeric', nullable: true })
   val2: string | null;
-
-  @Column({ name: 'timestamp', type: 'timestamp' })
-  timestamp: Date;
 }
