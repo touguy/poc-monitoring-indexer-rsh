@@ -136,32 +136,45 @@ export class BlockService implements OnModuleInit {
 
   /**
    * [공통 헬퍼 - 블록 범위 저장]
-   * 지정된 범위의 블록 정보를 RPC로 순차 조회하여 DB에 저장합니다.
-   * 각 요청 사이에 100ms 딜레이를 두어 RPC 노드의 과부하를 방지합니다.
+   * 🚀 [Ponder 확장 기능 - 옵션 5] 대량 동기화 시 Promise.all 기반 Bulk Chunking 도입
    */
   private async saveBlocksInRange(startBlock: number, endBlock: number) {
     this.logger.info(`블록 동기화 범위: ${startBlock} ~ ${endBlock}`);
 
-    for (let i = startBlock; i <= endBlock; i++) {
-      const block = await this.rpcService.getBlockByNumber(i);
+    const chunkSize = 50; // 한 번에 병렬로 가져올 블록 수 (Rate Limit 고려)
 
-      if (block) {
-        const blockRecord = new BlockRecord();
-        blockRecord.blockNumber = i;
-        blockRecord.blockHash = block.hash!;
-        blockRecord.parentHash = block.parentHash;
-        blockRecord.status = BlockStatus.UNFINALIZED;
-        blockRecord.timestamp = new Date(block.timestamp * 1000);
+    for (let currentStart = startBlock; currentStart <= endBlock; currentStart += chunkSize) {
+      const currentEnd = Math.min(currentStart + chunkSize - 1, endBlock);
+      this.logger.info(`[Bulk Chunking] 블록 병렬 수집 중: ${currentStart} ~ ${currentEnd}`);
 
-        await this.blockRecordRepo.saveBlock(blockRecord);
+      const blockPromises: Promise<void>[] = [];
+
+      for (let i = currentStart; i <= currentEnd; i++) {
+        blockPromises.push(
+          this.rpcService.getBlockByNumber(i).then(async (block) => {
+            if (block) {
+              const blockRecord = new BlockRecord();
+              blockRecord.blockNumber = i;
+              blockRecord.blockHash = block.hash!;
+              blockRecord.parentHash = block.parentHash;
+              blockRecord.status = BlockStatus.UNFINALIZED;
+              blockRecord.timestamp = new Date(block.timestamp * 1000);
+
+              await this.blockRecordRepo.saveBlock(blockRecord);
+            }
+          })
+        );
       }
 
-      // RPC 노드의 Rate Limit 방지를 위해 각 요청 사이에 100ms 딜레이 적용
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+      // 병렬 요청 실행
+      await Promise.all(blockPromises);
 
-    // 트랜젝션 데이터 일괄 조회
-    await this.contractEventService.fetchAndSaveEventsForBlock(startBlock, endBlock);
+      // 🚀 해당 Chunk 범위(예: 1~50)에 대한 이벤트를 일괄 수집
+      await this.contractEventService.fetchAndSaveEventsForBlock(currentStart, currentEnd);
+
+      // RPC 노드의 Rate Limit 방지를 위해 청크 간 200ms 딜레이 적용
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
 
     this.logger.info(`블록 범위 동기화 완료: ${startBlock} ~ ${endBlock}`);
   }

@@ -10,6 +10,8 @@ NestJS와 PostgreSQL을 사용하여 이더리움(Sepolia/Mainnet 호환) 네트
 > - **옵션 2**: WebSocket 기반 실시간 Reorg 감지 (Realtime Backtracing)
 > - **옵션 3**: 팩토리(Factory) 패턴 동적 컨트랙트 주소 추적
 > - **옵션 4**: 내부 트랜잭션 (Traces) 수집 기능
+> - **옵션 5**: 초기 및 과거 블록 대량 동기화 최적화 (Bulk Chunking)
+> - **옵션 6**: 네트워크 트래픽 절감을 위한 RPC 로컬 캐싱 계층 (RPC Cache Layer) 도입
 
 > **주의 사항**: 본 마스터 PRD 문서는 핵심 아키텍처 및 개요를 포괄하며, 구체적인 비즈니스 로직, 스키마, 시스템 정책은 아래의 부속 상세 문서를 참조해야 합니다.
 > AI/에이전트 환경의 경우, 반드시 `AGENTS.md`를 우선 숙지하십시오.

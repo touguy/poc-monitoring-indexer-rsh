@@ -92,7 +92,8 @@ export class ContractEventService implements OnModuleInit {
     try {
       // 🚀 [Ponder 확장 기능 - 옵션 1] Bloom Filter 최적화 적용
       const combinedAddresses = [...this.targetAddresses, ...Array.from(this.dynamicAddresses)];
-      if (logsBloom && !BloomUtil.isRelevant(logsBloom, combinedAddresses, this.targetTopics)) {
+      // 단일 블록 조회이고 logsBloom이 있을 때만 필터 적용 (다중 범위일 땐 우회)
+      if (fromBlock === toBlock && logsBloom && !BloomUtil.isRelevant(logsBloom, combinedAddresses, this.targetTopics)) {
         this.logger.debug(`[Bloom Filter] 블록 ${blockNumber}에는 관심 대상 이벤트가 존재하지 않으므로 RPC 호출을 스킵합니다.`);
         return;
       }
@@ -105,18 +106,34 @@ export class ContractEventService implements OnModuleInit {
         topics: [this.targetTopics], // RPC 레벨에서 지정 토픽 중 하나라도 매칭(OR)되는 로그만 필터링
       };
 
-      const fetchLogsPromise = this.rpcService.getLogs(filter);
+      let logs: ethers.Log[];
+      let traces: any[] = [];
       
-      let fetchTracesPromise: Promise<any[]> = Promise.resolve([]);
-      // 🚀 [Ponder 확장 기능 - 옵션 4] 내부 트랜잭션 수집 (환경변수 토글)
-      if (this.configService.get<string>('ENABLE_TRACE_SYNC') === 'true' && blockHash) {
-        fetchTracesPromise = this.rpcService.debugTraceBlockByHash(blockHash).catch(e => {
-          this.logger.error(`[Trace Sync] Trace 호출 실패: ${e.message}`);
-          return [];
-        });
-      }
+      try {
+        const fetchLogsPromise = this.rpcService.getLogs(filter);
+        
+        let fetchTracesPromise: Promise<any[]> = Promise.resolve([]);
+        // 🚀 [Ponder 확장 기능 - 옵션 4] 내부 트랜잭션 수집 (환경변수 토글)
+        if (this.configService.get<string>('ENABLE_TRACE_SYNC') === 'true' && blockHash) {
+          fetchTracesPromise = this.rpcService.debugTraceBlockByHash(blockHash).catch(e => {
+            this.logger.error(`[Trace Sync] Trace 호출 실패: ${e.message}`);
+            return [];
+          });
+        }
 
-      const [logs, traces] = await Promise.all([fetchLogsPromise, fetchTracesPromise]);
+        [logs, traces] = await Promise.all([fetchLogsPromise, fetchTracesPromise]);
+      } catch (rpcError: any) {
+        // 🚀 [Ponder 확장 기능 - 옵션 5] 에러 발생 (결과값 초과 등) 시 Dynamic Chunking (범위 쪼개기)
+        if (fromBlock < toBlock) {
+          this.logger.warn(`[Dynamic Chunking] 범위 ${fromBlock}-${toBlock} 수집 중 에러 발생, 범위를 절반으로 쪼개어 재시도합니다.`);
+          const mid = Math.floor((fromBlock + toBlock) / 2);
+          await this.fetchAndSaveEventsForBlock(fromBlock, mid);
+          await this.fetchAndSaveEventsForBlock(mid + 1, toBlock);
+          return;
+        } else {
+          throw rpcError;
+        }
+      }
 
       if (traces && traces.length > 0) {
         const traceRecordsToSave = traces.map((t: any) => {

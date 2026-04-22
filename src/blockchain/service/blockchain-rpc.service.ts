@@ -17,6 +17,10 @@ import { Logger } from 'winston';
 export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
   private provider: ethers.JsonRpcProvider;
 
+  // 🚀 [Ponder 확장 기능 - 옵션 6] RPC 응답 로컬 캐싱을 위한 간이 LRU Map
+  private readonly blockCache = new Map<number | string, ethers.Block>();
+  private readonly maxCacheSize = 1000;
+
   constructor(
     private readonly config: ConfigService,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
@@ -37,10 +41,36 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 블록 번호 또는 태그('safe', 'finalized', 'latest')로 블록 정보를 조회합니다.
-   * Reorg 검증 시 실제 해시와 비교하고, Finality 체크 시 'safe'/'finalized' 태그를 사용합니다.
+   * 🚀 [Ponder 확장 기능 - 옵션 6] 조회 시 로컬 캐시를 우선 확인하여 네트워크 I/O를 절감합니다.
    */
   async getBlockByNumber(blockTag: string | number): Promise<ethers.Block | null> {
-    return this.retryOperation(() => this.provider.getBlock(blockTag));
+    // 동적 태그(latest, safe, finalized)는 매번 바뀌므로 캐싱하지 않음
+    if (typeof blockTag === 'string' && ['latest', 'safe', 'finalized'].includes(blockTag)) {
+      return this.retryOperation(() => this.provider.getBlock(blockTag));
+    }
+
+    // 캐시 히트
+    if (this.blockCache.has(blockTag)) {
+      this.logger.debug(`[RPC Cache Hit] 블록 ${blockTag} 캐시에서 반환`);
+      return this.blockCache.get(blockTag)!;
+    }
+
+    const block = await this.retryOperation(() => this.provider.getBlock(blockTag));
+    
+    // 캐시 미스 -> 캐시 저장
+    if (block) {
+      if (this.blockCache.size >= this.maxCacheSize) {
+        // Map의 순서를 보장받아 첫 번째 요소(가장 오래된 것) 삭제 (간이 LRU)
+        const firstKey = this.blockCache.keys().next().value;
+        if (firstKey !== undefined) this.blockCache.delete(firstKey);
+      }
+      this.blockCache.set(blockTag, block);
+      if (block.hash) {
+        this.blockCache.set(block.hash, block);
+      }
+    }
+    
+    return block;
   }
 
   /**
