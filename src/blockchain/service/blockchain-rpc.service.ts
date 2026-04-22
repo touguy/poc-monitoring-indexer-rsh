@@ -24,12 +24,12 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: ConfigService,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
-  ) {}
+  ) { }
 
   /** 모듈 초기화 시 HTTP Provider를 생성합니다. */
   onModuleInit() {
     const rpcUrl = this.config.getOrThrow<string>('RPC_URL');
-    
+
     // 🚀 [Ponder 확장 기능 - 옵션 8] JSON-RPC Batching 활성화
     // batchMaxCount: 여러 RPC 요청을 모아서 단일 HTTP 요청으로 전송하여 TCP 병목 방지
     // staticNetwork: 네트워크 ID(chainId) 변경을 매번 확인하지 않아 부하 최소화
@@ -37,7 +37,7 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
       batchMaxCount: 50,
       staticNetwork: true,
     });
-    
+
     this.logger.info('BlockchainRpcService initialized with RPC Batching', { rpcUrl });
   }
 
@@ -64,7 +64,7 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
     }
 
     const block = await this.retryOperation(() => this.provider.getBlock(blockTag));
-    
+
     // 캐시 미스 -> 캐시 저장
     if (block) {
       if (this.blockCache.size >= this.maxCacheSize) {
@@ -77,7 +77,7 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
         this.blockCache.set(block.hash, block);
       }
     }
-    
+
     return block;
   }
 
@@ -95,16 +95,6 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
    */
   async getLogs(filter: ethers.Filter): Promise<ethers.Log[]> {
     return this.retryOperation(() => this.provider.getLogs(filter));
-  }
-
-  /**
-   * 🚀 [Ponder 확장 기능] 블록 해시 기반으로 내부 트랜잭션(Traces)을 수집합니다.
-   * @param blockHash 대상 블록 해시
-   */
-  async debugTraceBlockByHash(blockHash: string): Promise<any[]> {
-    return this.retryOperation(() => 
-      this.provider.send('debug_traceBlockByHash', [blockHash, { tracer: 'callTracer' }])
-    );
   }
 
   /**

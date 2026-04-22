@@ -20,9 +20,6 @@
    - **RPC 호출 제거**: WS 헤더에 포함된 `hash`, `parentHash`, `timestamp`, `logsBloom` 등을 즉시 사용함으로써 `eth_getBlockByNumber` 호출을 생략합니다.
 2. **메모리 큐(Memory Queue) 기반 순차 처리**:
    - Race Condition 방지를 위해 수신된 헤더를 `blockQueue`에 적재하고 워커(`processBlockQueue`)가 순차적으로 처리합니다.
-3. **Realtime Reorg 감지 (Backtracing)**:
-   - 큐에서 블록 처리 전, 메모리에 캐싱된 `lastProcessedBlockHash`와 새 블록의 `parentHash`를 대조합니다.
-   - 해시 불일치 시 즉시 역추적(While loop)을 시작하여 공통 조상을 찾고 DB 상태를 롤백한 뒤 동기화를 재개합니다.
 
 ---
 
@@ -42,8 +39,6 @@
 1. **Bloom Filter 기반 RPC 최적화**:
    - 블록 헤더의 `logsBloom`을 `ethers.js` 유틸리티로 먼저 검사합니다.
    - 타겟 컨트랙트 주소나 토픽이 존재할 가능성이 있을 때만 `eth_getLogs` RPC를 명시적으로 요청합니다.
-2. **팩토리(Factory) 패턴 동적 주소 추적**:
-   - Factory 컨트랙트의 이벤트를 감시하여 생성된 자식 컨트랙트 주소를 `DynamicAddressRegistry`에 동적으로 추가하고 감시 대상에 포함합니다.
-3. **제너릭 파싱 및 저장**:
+2. **제너릭 파싱 및 저장**:
    - 로그를 `ethers.Interface`로 디코딩하여 `arg1`, `arg2`, `val1` 등 제너릭 컬럼에 분해 저장합니다.
    - 모든 이벤트 레코드는 블록 번호와 연동되어 Reorg 시 함께 롤백됩니다.

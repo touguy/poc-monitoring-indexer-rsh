@@ -6,9 +6,6 @@ import { ethers } from 'ethers';
 import { ContractEventRepository } from '../repository/contract-event-record.repository';
 import { ContractEventRecord } from '../entity/contract-event-record.entity';
 import { BlockchainRpcService } from '../../blockchain/service/blockchain-rpc.service';
-import { DynamicContractRepository } from '../repository/dynamic-contract.repository';
-import { InternalTransactionRecordRepository } from '../repository/internal-transaction-record.repository';
-import { InternalTransactionRecord } from '../entity/internal-transaction-record.entity';
 import { BloomUtil } from '../../common/utils/bloom.util';
 
 /**
@@ -26,17 +23,12 @@ export class ContractEventService implements OnModuleInit {
     'event Mint(address indexed to, uint amount)',
     'event Burn(address indexed burner, uint256 value)',
     'event Deposit(address indexed dst, uint wad)',
-    'event Withdrawal(address indexed src, uint wad)',
-    'event PairCreated(address indexed token0, address indexed token1, address pair, uint)',
-    'event Created(address indexed child)'
+    'event Withdrawal(address indexed src, uint wad)'
   ];
   private iface: ethers.Interface;
-  private dynamicAddresses: Set<string> = new Set();
 
   constructor(
     private readonly contractEventRepo: ContractEventRepository,
-    private readonly dynamicContractRepo: DynamicContractRepository,
-    private readonly internalTxRepo: InternalTransactionRecordRepository,
     private readonly rpcService: BlockchainRpcService,
     private readonly configService: ConfigService,
     @Inject(WINSTON_MODULE_PROVIDER) private readonly logger: Logger,
@@ -61,11 +53,7 @@ export class ContractEventService implements OnModuleInit {
           return null;
         }).filter((t): t is string => t !== null);
 
-        // 🚀 [Ponder 확장 기능 - 옵션 3] DB에 저장된 기존 동적 팩토리 주소들을 로드합니다.
-        const dynamicList = await this.dynamicContractRepo.findAllAddresses();
-        dynamicList.forEach(addr => this.dynamicAddresses.add(addr.toLowerCase()));
-
-        this.logger.info(`ContractEventService initialized. Listening to ${this.targetAddresses.length} static addresses, ${this.dynamicAddresses.size} dynamic addresses, and ${this.targetTopics.length} topics.`);
+        this.logger.info(`ContractEventService initialized. Listening to ${this.targetAddresses.length} static addresses and ${this.targetTopics.length} topics.`);
       } else {
         this.logger.warn('CONTRACT_ADDRESSES or CONTRACTS_TOPICS is not configured in .env');
       }
@@ -91,9 +79,8 @@ export class ContractEventService implements OnModuleInit {
 
     try {
       // 🚀 [Ponder 확장 기능 - 옵션 1] Bloom Filter 최적화 적용
-      const combinedAddresses = [...this.targetAddresses, ...Array.from(this.dynamicAddresses)];
       // 단일 블록 조회이고 logsBloom이 있을 때만 필터 적용 (다중 범위일 땐 우회)
-      if (fromBlock === toBlock && logsBloom && !BloomUtil.isRelevant(logsBloom, combinedAddresses, this.targetTopics)) {
+      if (fromBlock === toBlock && logsBloom && !BloomUtil.isRelevant(logsBloom, this.targetAddresses, this.targetTopics)) {
         this.logger.debug(`[Bloom Filter] 블록 ${blockNumber}에는 관심 대상 이벤트가 존재하지 않으므로 RPC 호출을 스킵합니다.`);
         return;
       }
@@ -102,26 +89,14 @@ export class ContractEventService implements OnModuleInit {
       const filter: ethers.Filter = {
         fromBlock,
         toBlock,
-        address: combinedAddresses.length > 0 ? combinedAddresses : undefined,
+        address: this.targetAddresses.length > 0 ? this.targetAddresses : undefined,
         topics: [this.targetTopics], // RPC 레벨에서 지정 토픽 중 하나라도 매칭(OR)되는 로그만 필터링
       };
 
       let logs: ethers.Log[];
-      let traces: any[] = [];
-      
-      try {
-        const fetchLogsPromise = this.rpcService.getLogs(filter);
-        
-        let fetchTracesPromise: Promise<any[]> = Promise.resolve([]);
-        // 🚀 [Ponder 확장 기능 - 옵션 4] 내부 트랜잭션 수집 (환경변수 토글)
-        if (this.configService.get<string>('ENABLE_TRACE_SYNC') === 'true' && blockHash) {
-          fetchTracesPromise = this.rpcService.debugTraceBlockByHash(blockHash).catch(e => {
-            this.logger.error(`[Trace Sync] Trace 호출 실패: ${e.message}`);
-            return [];
-          });
-        }
 
-        [logs, traces] = await Promise.all([fetchLogsPromise, fetchTracesPromise]);
+      try {
+        logs = await this.rpcService.getLogs(filter);
       } catch (rpcError: any) {
         // 🚀 [Ponder 확장 기능 - 옵션 5] 에러 발생 (결과값 초과 등) 시 Dynamic Chunking (범위 쪼개기)
         if (fromBlock < toBlock) {
@@ -133,21 +108,6 @@ export class ContractEventService implements OnModuleInit {
         } else {
           throw rpcError;
         }
-      }
-
-      if (traces && traces.length > 0) {
-        const traceRecordsToSave = traces.map((t: any) => {
-          const traceEntity = new InternalTransactionRecord();
-          traceEntity.transactionHash = t.transactionHash || '';
-          traceEntity.blockNumber = blockNumber;
-          traceEntity.fromAddress = t.result?.from || '';
-          traceEntity.toAddress = t.result?.to || null;
-          traceEntity.value = t.result?.value || null;
-          traceEntity.callType = t.result?.type || 'CALL';
-          return traceEntity;
-        });
-        await this.internalTxRepo.saveTracesBulk(traceRecordsToSave);
-        this.logger.info(`Block ${blockHash}: ${traces.length} internal traces saved.`);
       }
 
       if (!logs || logs.length === 0) return;
@@ -179,14 +139,6 @@ export class ContractEventService implements OnModuleInit {
             record.arg1 = parsed.args[0]?.toString() || null; // owner
             record.arg2 = parsed.args[1]?.toString() || null; // spender
             record.val1 = parsed.args[2]?.toString() || null; // value
-          } else if (parsed.name === 'PairCreated' || parsed.name === 'Created') {
-            // 🚀 [Ponder 확장 기능 - 옵션 3] 동적 팩토리 주소 추출 및 캐싱
-            const childAddr = (parsed.args[2] || parsed.args.pair || parsed.args.child)?.toString();
-            if (childAddr) {
-              await this.dynamicContractRepo.saveAddress(log.address, childAddr, log.blockNumber);
-              this.dynamicAddresses.add(childAddr.toLowerCase());
-              this.logger.info(`[Dynamic Factory] 새 자식 컨트랙트 감지: ${childAddr}`);
-            }
           } else if (parsed.name === 'Mint' || parsed.name === 'Deposit') {
             record.arg1 = null; // from에 해당하는 주소 없음
             record.arg2 = parsed.args[0]?.toString() || null; // to 또는 dst
@@ -222,13 +174,9 @@ export class ContractEventService implements OnModuleInit {
     }
   }
 
-  /**
-   * Reorg로 인해 롤백이 필요할 때 호출됩니다.
-   */
   async rollbackEvents(blockNumber: number): Promise<void> {
     try {
       await this.contractEventRepo.invalidateEventsFromBlock(blockNumber);
-      await this.internalTxRepo.invalidateTracesFromBlock(blockNumber);
     } catch (e: any) {
       this.logger.error(`Failed to rollback events for block ${blockNumber}: ${e.message}`);
     }

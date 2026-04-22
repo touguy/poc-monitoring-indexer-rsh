@@ -12,8 +12,8 @@ NestJS와 PostgreSQL을 사용하여 이더리움(Sepolia/Mainnet 호환) 네트
 - **Bulk & Dynamic Chunking**: 초기 동기화 시 `Promise.all` 병렬 처리를 수행하며, 노드 한도 초과 시 범위를 유연하게 조정하여 안정성을 확보합니다.
 - **Bloom Filter 기반 필터링**: 블록 헤더의 `logsBloom`을 먼저 검사하여, 필요한 이벤트가 존재할 가능성이 있을 때만 로그 조회 RPC를 수행합니다.
 
-### 🛡️ 실시간 Chain Reorg 대응
-- **Realtime Backtracing**: 실시간 블록 수신 즉시 부모 해시를 대조하여 분기를 감지하고, 즉각적인 역추적 및 롤백을 수행합니다.
+### 🛡️ Chain Reorg 대응 및 확정성 관리
+- **Polling 기반 Reorg 감지**: 주기적인 Polling을 통해 미확정 블록의 해시를 노드와 대조하여 분기를 감지하고 복구합니다.
 - **Multi-stage Finality 관리**: 노드의 `safe`, `finalized` 태그를 추적하여 DB 내 블록 상태를 단계적으로 확정합니다.
 
 ---
