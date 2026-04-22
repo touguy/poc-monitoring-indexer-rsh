@@ -29,8 +29,16 @@ export class BlockchainRpcService implements OnModuleInit, OnModuleDestroy {
   /** 모듈 초기화 시 HTTP Provider를 생성합니다. */
   onModuleInit() {
     const rpcUrl = this.config.getOrThrow<string>('RPC_URL');
-    this.provider = new ethers.JsonRpcProvider(rpcUrl);
-    this.logger.info('BlockchainRpcService initialized', { rpcUrl });
+    
+    // 🚀 [Ponder 확장 기능 - 옵션 8] JSON-RPC Batching 활성화
+    // batchMaxCount: 여러 RPC 요청을 모아서 단일 HTTP 요청으로 전송하여 TCP 병목 방지
+    // staticNetwork: 네트워크 ID(chainId) 변경을 매번 확인하지 않아 부하 최소화
+    this.provider = new ethers.JsonRpcProvider(rpcUrl, undefined, {
+      batchMaxCount: 50,
+      staticNetwork: true,
+    });
+    
+    this.logger.info('BlockchainRpcService initialized with RPC Batching', { rpcUrl });
   }
 
   /** 모듈 종료 시 이벤트 리스너를 정리하여 메모리 누수를 방지합니다. */

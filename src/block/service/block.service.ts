@@ -7,7 +7,7 @@ import { Logger } from 'winston';
 import { BlockRecordRepository } from '../repository/block-record.repository';
 import { BlockRecord, BlockStatus } from '../entity/block-record.entity';
 import { BlockchainRpcService } from '../../blockchain/service/blockchain-rpc.service';
-import { BlockchainWsService } from '../../blockchain/service/blockchain-ws.service';
+import { BlockchainWsService, EthBlockHeader } from '../../blockchain/service/blockchain-ws.service';
 import { ReorgService } from '../../reorg/service/reorg.service';
 import { ContractEventService } from '../../contract/service/contract-event.service';
 import { BlockRecordQueryDto } from '../dto/block-record-query.dto';
@@ -44,8 +44,8 @@ export class BlockService implements OnModuleInit {
   /** 마지막으로 DB에 반영된 'finalized' 블록 번호 (불필요한 중복 UPDATE 방지용) */
   private lastProcessedFinalizedBlock = 0;
 
-  /** WebSocket 이벤트를 순차 처리하기 위한 메모리 큐 */
-  private blockQueue: number[] = [];
+  /** WebSocket 이벤트를 순차 처리하기 위한 메모리 큐 (🚀 옵션 9: 상세 헤더 직접 저장) */
+  private blockQueue: EthBlockHeader[] = [];
 
   /** 메모리 큐 처리 워커 동작 여부 플래그 */
   private isProcessingQueue = false;
@@ -72,12 +72,12 @@ export class BlockService implements OnModuleInit {
     // 1. WebSocket 'block' 이벤트 구독 시작 (초기 동기화 중에도 이벤트를 우선 감지)
     this.logger.info('BlockService WebSocket 리스너 초기화 (newHeads 구독 시작)');
 
-    // WsService는 이벤트를 단순 전달합니다. (메모리 큐 적재)
-    this.wsService.onEvent('block', async (...args: any[]) => {
-      const blockNumber = args[0] as number; // 'block' 이벤트는 첫 번째 인자가 blockNumber
-      this.logger.debug(`[WS Event] 블록 ${blockNumber} 큐에 적재`);
-      this.blockQueue.push(blockNumber);
-      this.processBlockQueue(); // 큐 워커 실행 (동시 실행 방지)
+    // WsService로부터 상세 헤더 정보가 포함된 이벤트를 수신합니다. (🚀 옵션 9 적용)
+    // 명시적으로 newHeads를 구독하여 RPC 호출 없이 블록 데이터를 획득합니다.
+    await this.wsService.onBlockHeader(async (header: EthBlockHeader) => {
+      this.logger.debug(`[WS Header Event] 블록 ${parseInt(header.number)} 큐에 적재 (Hash: ${header.hash})`);
+      this.blockQueue.push(header);
+      this.processBlockQueue();
     });
 
     // 2. 초기 동기화 실행 (비동기 Background 실행)
@@ -191,9 +191,9 @@ export class BlockService implements OnModuleInit {
 
     try {
       while (this.blockQueue.length > 0) {
-        const blockNumber = this.blockQueue.shift();
-        if (blockNumber) {
-          await this.handleNewBlock(blockNumber);
+        const header = this.blockQueue.shift();
+        if (header) {
+          await this.handleNewBlock(header);
         }
       }
     } catch (error: any) {
@@ -215,31 +215,23 @@ export class BlockService implements OnModuleInit {
    *      - DB의 최신 블록 hash ≠ 새 블록의 parentHash → Reorg!
    *   5. 새 블록을 UNFINALIZED 상태로 DB에 저장
    */
-  private async handleNewBlock(blockNumber: number) {
+  private async handleNewBlock(header: EthBlockHeader) {
+    const blockNumber = parseInt(header.number);
+
     try {
+      this.logger.debug(`WS00 :블록 ${blockNumber} 처리 시작 (From WS Header)`);
 
-      this.logger.debug(`WS00 :블록 ${blockNumber} 수신`);
+      // 🚀 [Ponder 확장 기능 - 옵션 9] WS 헤더 데이터를 블록 객체로 즉시 변환 (RPC 스킵)
+      this.logger.debug(`[WS Header Cache] RPC 호출을 스킵하고 WS 헤더 데이터를 사용합니다.`);
+      const block = {
+        hash: header.hash,
+        parentHash: header.parentHash,
+        number: blockNumber,
+        timestamp: parseInt(header.timestamp),
+        logsBloom: header.logsBloom,
+      };
 
-      // 1. WS는 blockNumber만 push함 → HTTP RPC로 상세 조회 (지연 인덱싱 대비 재시도 로직)
-      let block = null;
-      let retryCount = 0;
-      const maxRetries = 5;
-
-      while (!block && retryCount < maxRetries) {
-        block = await this.rpcService.getBlockByNumber(blockNumber);
-
-        if (!block) {
-          retryCount++;
-          if (retryCount >= maxRetries) {
-            this.logger.error(`[!!!조회 포기!!!] 블록 ${blockNumber} 데이터가 계속 존재하지 않습니다. 최대 재시도 도달, 처리를 건너뜁니다.`);
-            return;
-          }
-          this.logger.warn(`[조회 지연] 블록 ${blockNumber} 미발견 (시도 ${retryCount}/${maxRetries}). 1초 대기 후 재시도합니다...`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-
-      this.logger.debug(`WS01 :블록 ${blockNumber} RPC 수신`);
+      this.logger.debug(`WS01 :블록 ${blockNumber} 데이터 준비 완료 (Hash: ${block.hash})`);
 
       // 🚀 [Ponder 확장 기능 - 옵션 2] 실시간 Reorg 감지 및 백트레이싱 (Realtime Backtracing)
       if (this.lastProcessedBlockHash && this.lastProcessedBlockNumber !== null) {
